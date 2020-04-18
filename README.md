@@ -4,11 +4,13 @@ README
 This is a backup of the xruna package originally written by [Douglas
 McFadzean][1].  The original website appears to have disappeared in the last
 year or so, and this script might be useful for others so I'll host it here.
-This repository is simply a dump of the contents of an Arch Linux Package as
-the original source is no longer available, and I don't know how to unmake a
-package into its sources and `PKGBUILD`.
 
-It's licensed under the [Mozilla Public License 2.0 (MPL2)](https://www.mozilla.org/MPL).
+The `PKGBUILD` was reverse-engineered from the similar `PKGBUILD` for `runa` by
+the [same author on the AUR][2].  I haven't tested it, but it should put all
+the things in the right spots.
+
+The application is licensed under the [Mozilla Public License 2.0
+(MPL2)](https://www.mozilla.org/MPL).
 
 xruna
 =====
@@ -28,3 +30,4 @@ file for more information.
 
 
 [1]: http://appstogo.mcfadzean.org.uk/linux.html
+[2]: https://aur.archlinux.org/packages/runa/
