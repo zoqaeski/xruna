@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=xruna-assoc
+Comment=Open objects with associated applications
+Terminal=false
+NoDisplay=true
+Icon=xruna
+Exec=xruna -t %U
+Categories=Applications;System;Utility;

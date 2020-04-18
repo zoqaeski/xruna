@@ -1,0 +1,295 @@
+#!/usr/bin/env bash
+# xruna : Runs desktop applications, optionally opening file or url objects; express fork of Runa
+# Arch dependencies: dmenu libnotify {file|glib2|perl-file-mimeinfo}
+
+# Copyright © 2017-2018 Douglas McFadzean
+# This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0.
+# If a copy of the MPL was not distributed with this file, You can obtain one at http://mozilla.org/MPL/2.0/.
+
+
+pgm=xruna; vers='3.1.0'
+Usage()
+{ cat <<USAGE
+$pgm version $vers
+Copyright © 2017-2018 Douglas McFadzean
+Distributed under the terms of the Mozilla Public License version 2.0
+
+Usage:
+$pgm -r app ...
+$pgm -o app [obj ...]
+$pgm [opt ... --] [-m i] [-s|-f|-u] [-c] -a [obj ...]
+$pgm [opt ... --] [-m i] -l [obj ...]
+$pgm [opt ... --] [-m i] [-s] -t obj ...
+$pgm -k key app ...
+USAGE
+}
+
+Err()
+{ # Displays error message $1 [and exits with code $2]
+notify-send -u critical "$pgm error" "$1" &
+[[ -n $2 ]] && exit $2
+}
+
+Xdup()
+{ # Axes duplicates[*] and nulls from stdin
+local -A a; local r s
+while read -r r; do [[ -z $r ]] && continue; s=${r%\*}; if (( ! a["$s"] )); then a["$s"]=1; echo "$r"; fi; done
+}
+
+Body() { local hd; IFS= read -r hd; echo "$hd"; "$@"; }  # Prints header from stdin then runs command $@ on rest of stdin
+
+Cache()
+{ # Outputs cache of all apps, firstly refreshing cache file if application directories have been modified more recently
+if [[ -n $(find -L $dapps -type d -newer "$cache" 2>&1) ]]; then  # Refresh: find apps recursively and change: subdir/app -> subdir-app
+  grep -vxF "$(grep -l -R -m 1 -E "^(Hidden=true$nodisp)" $dapps | sed -r 's:^.+/applications/::' )" < \
+             <(find -L $dapps -maxdepth 2 -type f -name '*.desktop' -printf '%P\n') \
+             | sed -r 's:\.desktop$::;s:/:-:' | sort -u >"$cache"
+fi
+case $ashow in  # Output cache: sorted and optionally headed by favourite or most recently used apps
+  s) cat "$cache" ;;
+  f) sed -r '/^[^#]/!d;s/^.+ +//' "$fav" | cat - "$cache" | Xdup ;;
+  u) cat "$mru" "$cache" | Xdup ;;
+esac
+}
+
+Opdesk()
+{ # Opens desktop file ^$apps[*], choosing command from menu if more than one
+local op df=${apps:1}; df=${df%\*}
+if (( ${#cmd_opdesk[@]} == 1 )); then op="${cmd_opdesk[0]}"
+else op=$(printf '%s\n' "${cmd_opdesk[@]}" | ${menus[${menu[$act]}]} "${opts[@]}" -p 'Open with')
+fi
+if [[ -n $op ]]; then Run k $df; $op "$file"; fi
+}
+
+Run()
+{ # Sets desktop $Keys to their values [$1=k] or runs application, optionally opening objects: [path/]app[.desktop] [obj ...]
+local nop; if [[ $1 == k ]]; then nop=k; shift; fi       # Check if only returning key values
+local bg=' &' ap=$1 cmd val Object; shift                # Save application and set all positional parameters as objects
+local id=${ap%.desktop}.desktop sid sub dir i            # Force .desktop extension on appid
+local -a keys                                            # Array to store key=value pairs
+unset file Type Name Icon Hidden Exec Path Terminal URL  # Set key values to null
+# Find desktop file
+if [[ $id == */* ]]; then file="$id"                     # Path already specified, so store
+else                                                     # Otherwise find in application directories
+  sub=${id%%-*}; [[ $sub != $id ]] && sid=$sub/${id#*-}             # Looking for app.desktop and subdir/app.desktop?
+  for dir in $dapps; do                                             # Loop over application directories
+    [[ -d "$dir" ]] || continue                                     # Skip if directory not found
+    if   [[            -r $dir/$id  ]]; then file=$dir/$id ; break  # Found in directory: app.desktop
+    elif [[ -n $sid && -r $dir/$sid ]]; then file=$dir/$sid; break  #                     subdir/app.desktop
+    else for sub in $dir/*/; do if [[ $sub != *\** && -r $sub$id ]]; then file=$sub$id; break 2; fi; done  # Found in subdirectory: app.desktop
+    fi
+  done
+fi
+# Extract key values from desktop file
+if [[ -n $file ]]; then
+  mapfile -t keys < <(sed -n '/^\[Desktop Entry\]/,/^\[/{/^Type\|^Name=\|^Icon=\|^Hidden=\|^Exec=\|^Path=\|^Terminal=\|^URL=/p}' "$file")
+  if (( ${#keys[@]} )); then
+    for i in "${keys[@]}"; do eval "${i%%=*}"='${i#*=}'; done  # Set key variables ensuring values are preserved without tokenization
+  fi
+fi
+[[ -n $nop ]] && return  # Return key values only?
+if [[ -z $Name  ]]      ; then Err "Application '$ap' is missing or invalid"; return 3; fi
+if [[ $Hidden == true ]]; then Err "Application '$ap' is hidden"            ; return 4; fi
+if [[ $logmru == *$act* ]] && (( nmru )); then  # Log app to MRU file?
+  id=${ap##*/}; awk -i inplace "BEGINFILE {print \"${id%.desktop}\"}; NR <$nmru {print}" "$mru"
+fi
+# Build command line from Exec key
+cmd="$Exec"
+if [[ $Type == Link ]]; then cmd="$cmd_url $URL"                      # Open URL
+else                                                                  # Expand %field codes in command line
+  cmd=${cmd//%%/_%_}                                                  # Temporarily isolate %% -> _%_
+  val="${Icon:+--icon '$Icon'}"    ; cmd=${cmd//%i/$val}              # %i = Icon
+  val="'$Name'"                    ; cmd=${cmd//%c/$val}              # %c = Name
+  [[ $cmd == *%k* ]] && cmd=${cmd//%k/"'$(readlink -ens "$file")'"};  # %k = location as resolved filepath
+  val='"$Object"'                  ; cmd=${cmd//%[fu]/$val}           # %f,%u = single file or url
+  val='"$@"'                       ; cmd=${cmd//%[FU]/$val}           # %F,%U = list of files or urls
+  cmd="${cmd//_%_/%}"                                                 # Finally resolve %% -> _%_ -> %
+  [[ $Terminal == true ]] && cmd="$cmd_term $cmd"                     # Run in terminal
+fi
+cmd="$cmd$bg"                                                         # Append backgrounding condition
+# Execute command line
+if [[ -n $Path ]] && ! cd "$Path"; then Err "Cannot change to application '$ap' working directory '$Path'"; return 5; fi
+if [[ $cmd =~ '"$@"' ]]; then eval "$cmd"                             # Execute %F|U command with string of all objects
+elif [[ $cmd =~ '"$Object"' ]]; then
+  if (( $# )); then for Object in "$@"; do eval "$cmd"; done          # Execute %f|u command for each object
+  else eval "${cmd/'"$Object"'/}"                                     # Execute %f|u command alone as no objects specified
+  fi
+else
+  eval "$cmd"                                                         # Execute command not containing %f|F|u|U
+fi
+return 0
+}
+
+
+# Initialization -----------------------
+
+declare -A menu                                                # Associative arrays: menu command indices
+confdir=${XRUNA_CONF:-${XDG_CONFIG_HOME:-$HOME/.config}/$pgm}  # Configuration directory; override?
+[[ ! -d "$confdir"  ]] && mkdir -p "$confdir"                  #   create?
+cache="$confdir/${pgm}1.cache"                                 # Cache file ignoring NoDisplay key
+mru="$confdir/$pgm.mru"; [[ ! -e "$mru" ]] && >"$mru"          # Most recently used apps file; create?
+conf="$confdir/$pgm.conf"                                      # Configuration file; create?
+if [[ ! -e "$conf" ]]; then
+  printf '%s\n\n' "# $pgm $vers configuration file: $conf" >"$conf"
+  cat <<-'CONF' >>"$conf"
+	de=${XDG_CURRENT_DESKTOP:-}; de=${de%%:*}; de=${de,,}                                      # XDG: Lowercase first desktop environment
+	ddata="${XDG_DATA_HOME:-$HOME/.local/share}:${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"                   # XDG: data directories
+	dlist="${XDG_CONFIG_HOME:-$HOME/.config}:${XDG_CONFIG_DIRS:-/etc/xdg}:${ddata///share//share/applications}"  # XDG: mimeapps.list directories
+	menus=("${DMENU_CMD:-dmenu} -p Run" "${DMENU_CMD:-dmenu} -p App" "${DMENU_CMD:-dmenu}")    # Menu commands:
+	menu[a]=0; menu[l]=1; menu[t]=2                                                            #   indices of commands for a|l|t menus
+	cmd_mime='gio info'                # Command  to determine mimetype     : file|gio info|gvfs-info|mimetype
+	cmd_assoc='gio mime'               # Command  to find associated apps   : sed|gio mime|gvfs-mime --query
+	cmd_url='xdg-open'                 # Command  to open URL
+	cmd_term='xterm -hold -e'          # Command  to run program in terminal
+	cmd_edfav="${EDITOR:-leafpad}"     # Command  to edit favourites file
+	cmd_opdesk=("${EDITOR:-leafpad}")  # Commands to open desktop file
+	act=d                              # Default action: d(efault)|a(ll_menu)|t(ype_menu)
+	ashow=s                            # Show -a menu: s(orted)|f(avourites)|u(sed_recently)
+	nmru=15                            # Maximum number to store in MRU file
+	logmru='al'                        # Log apps to MRU file for actions: [r][o][a][l][t]
+	tsort=0                            # Boolean: sort the -t menu
+CONF
+fi 
+. "$conf"                   # Source configuration file
+fav="$confdir/$pgm.fav"     # Favourites file; create?
+if [[ ! -e "$fav" ]]; then
+  cat <<-FAV >"$fav"
+	# $pgm $vers favourites file: $fav
+
+	# Favourites listed in format: [mnemonic ]app
+	# Comment and null lines ignored
+	#xterm
+	#Fx firefox
+	#G gimp
+FAV
+fi
+
+# Split command line arguments at -- to extract additional dmenu options and program parameters
+[[ $1 =~ ^--[vh] ]] && Usage && exit  # Show program version and usage help
+args=("$@"); for i in "${!args[@]}"; do
+  if [[ ${args[$i]} == -- ]]; then opts=("${args[@]::$(( i ))}"); set -- "${args[@]:$(( i+1 ))}"; break; fi
+done
+
+# Parse command line
+while getopts 'ro:altsfum:ck:' OPTION
+do
+  case $OPTION in
+        r) act=r                       ;;  # Run list of apps
+        o) act=o; ap="$OPTARG"         ;;  # Open objects with a specific app
+        a) act=a                       ;;  # Menu of all apps
+        l) act=l                           # Menu of apps from stdin list
+           aplist=$(while read -r l; do [[ -n $l && $l != \#* ]] && echo "$l"; done) ;;  # Remove null and #comment lines
+        t) act=t                       ;;  # Menu of apps associated by mimetype
+    s|f|u) ashow=$OPTION               ;;  # How -a menu is to be shown
+        m) imenu=$OPTARG               ;;  # Menu command index
+        c) refresh=1                   ;;  # Refresh cache
+        k) act=k; ky="$OPTARG"         ;;  # Print key value(s)
+        *) Err "Invalid option '$*'" 1 ;;
+  esac
+done
+shift $((OPTIND - 1))
+(( ! $#      )) && { cache=${cache/1.c/2.c}; nodisp='|NoDisplay=true'; }  # Respect NoDisplay key if no objects specified
+(( refresh   )) && rm "$cache"                                            # Refresh cache?
+[[ -n $imenu ]] && menu[$act]=$imenu                                      # Use alternative menu command?
+
+# Tokenize XDG directories and files
+ddata=${ddata///:/:}; ddata=${ddata%/}; ddata=${ddata%:}                                                    # Remove any trailing / or :
+dlist=${dlist///:/:}; dlist=${dlist%/}; dlist=${dlist%:}
+dapps=${ddata///share//share/applications}; dapps=${dapps//:/ }                                             # App directories
+capps=${dapps///applications//applications/mimeinfo.cache}                                                  # mimeinfo.cache files
+dlist=${dlist//:/ }; for d in $dlist; do flist="$flist ${de:+$d/$de-mimeapps.list }$d/mimeapps.list"; done  # mimeapps.list files
+
+
+# Action -------------------------------
+
+case $act in
+
+    k) # Print key value(s)
+       for ap in "$@"; do Run k "$ap"
+         if [[ $ky == = ]]; then printf '%s\n' "file=$file" "Type=$Type" "Name=$Name" "Icon=$Icon" "Hidden=$Hidden" "Exec=$Exec" "Path=$Path" "Terminal=$Terminal" "URL=$URL"
+         else eval echo '"$'$ky'"'  # Just print value of specified key
+         fi
+       done ;;
+     
+    r) # Run list of apps
+       for ap in "$@"; do Run "$ap"; done ;;
+
+    o) # Open objects with specific app
+       Run $ap "$@" ;;
+
+    a) # Menu of all apps
+       while true; do
+         rc=0; apps=$(Cache | ${menus[${menu[a]}]} "${opts[@]}")
+         case "$apps" in                                                    # Filter control tokens
+              '') exit                                                 ;;
+             '?') notify-send "$pgm control tokens" 's f u e c ^app'   ;;   # Help
+           s|f|u) ashow=$apps                                          ;;   # How to show menu
+               e) $cmd_edfav "$fav"                                    ;;&  # Edit favourites file
+             c|e) rm "$cache"                                          ;;   # Refresh cache
+              ^*) Opdesk                                               ;;   # Open desktop file 
+               *) mapfile -t aps <<<"$apps"; for ap in "${aps[@]}"; do Run $ap "$@"; (( rc+=$? )); done  # Run app(s) and open objects
+                  (( ! rc )) && exit                                   ;;   # Exit only if aggregated return code is zero, else redisplay menu
+         esac
+       done ;;
+
+  d|t) # Determine mimetype 
+       if (( $# )); then obj="$1"; else exit; fi  # Need at least one object
+       if [[ $obj == file://* ]]; then            # file:// => Decode file urls to produce local file paths
+         for (( i=1; i<=$#; i++ )); do            # For all objects resolve %xx strings to characters 
+           set -- "${@:1:$(( i-1 ))}" "$(printf "$(sed -r 's@^file://@@;s@%([a-f0-9A-F]{2})@\\x\1@g' <<<"${@:$i:1}")")" "${@:$(( i+1 ))}"
+         done; obj="$1"
+       fi
+       if [[ $obj =~ ^[[:alpha:]][[:alnum:]+.-]*: ]]; then mtype="x-scheme-handler/${obj%%:*}"  # Scheme-handler
+       else case "$cmd_mime" in                                                                 # File object: run determinant
+           f*) mtype=$(file -bL --mime-type "$obj") ;;                                          #   fast but flawed
+           g*) mtype=$($cmd_mime -a standard::content-type "$obj"); mtype=${mtype##*e: } ;;     #   fast and accurate
+           m*) mtype=$(mimetype -bL "$obj") ;;                                                  #   very slow but accurate
+         esac; [[ -z $mtype ]] && Err "Cannot determine mimetype of object '$obj'" 2
+       fi
+       em=${mtype//./\\.}; em=${em//+/\\+}; em=${em////\\/}                                     # For sed, escape any .+/ in mimetype
+       case "$cmd_assoc" in
+         s*) defs=$(sed -rns "/^\[Default Applications\]/,/^\[/{/^$em=/{s///;s/\.desktop//g;s/;/ /g;p}}" $flist 2>/dev/null)
+             for def in $defs; do Run k $def; [[ -n $file ]] && break; done ;;                  # Default = first valid app in list
+         g*) mnu=$($cmd_assoc $mtype 2>/dev/null | awk '{if(NR==1 && $2!="default"){sub(/\.desktop/,""); \
+                   print $5"*"}}/^Recomm/,EOF{if($1!="Recommended"){sub(/\.desktop/,"");print $1}}' | Xdup)  # Default* + associated apps
+             read r <<<"$mnu"; [[ $r == *\* ]] && def=${r%\*} ;;                                             # Store default
+       esac
+       ;;&
+  
+    d) # Default app
+       [[ -n $def ]] && Run $def "$@" ;;
+
+    t) # Menu of apps associated by mimetype
+       if [[ $cmd_assoc == sed ]]; then  # Manually generate menu from default* + other_defaults + associated apps from mimecache.info files
+         mnu=$( ([[ -n $def ]] && echo $def\*; for d in $defs; do echo $d; done; \
+                 sed -rns "/^$em=/{s///;s/\.desktop;/\n/g;p}" $capps 2>/dev/null) | Xdup )
+       fi
+       while true; do
+         (( tsort )) && mnu=$( ${def:+Body} sort <<<"$mnu" )              # Sort menu keeping default app at top?
+         rc=0; apps=$(${menus[${menu[t]}]} "${opts[@]}" <<<"$mnu")        # Select app(s) from menu
+         case "$apps" in                                                  # Filter control tokens
+            '') exit                                                  ;;
+           '?') notify-send "$pgm control tokens" 's t ^app'          ;;  # Help
+             s) tsort=1                                               ;;  # Sort menu
+             t) notify-send -u low "${pgm}: $obj" "$mtype"            ;;  # Display mimetype
+            ^*) Opdesk                                                ;;  # Open desktop file
+             *) mapfile -t aps <<<"$apps"; for ap in "${aps[@]}"; do Run ${ap%\*} "$@"; (( rc+=$? )); done  # Run app(s) and open objects
+                (( ! rc )) && exit                                    ;;  # Exit only if aggregated return code is zero, else redisplay menu
+         esac
+       done ;;
+       
+    l) # Menu of apps from list
+       while true; do
+         # Remove any mnemonic from: [^][mnemonic ]app
+         rc=0; apps=$(${menus[${menu[l]}]} "${opts[@]}" <<<"$aplist" \
+                    | while read -r a; do [[ $a =~ ^(\^)?.+[[:space:]](.+)$ ]] && a="${BASH_REMATCH[1]}${BASH_REMATCH[2]}"; echo $a; done)
+         case "$apps" in                                       # Filter control tokens
+            '') exit                                       ;;
+           '?') notify-send "$pgm control tokens" '^app'   ;;  # Help
+            ^*) Opdesk                                     ;;  # Open desktop file
+             *) mapfile -t aps <<<"$apps"; for ap in "${aps[@]}"; do Run $ap "$@"; (( rc+=$? )); done  # Run app(s) and open objects
+                (( ! rc )) && exit                         ;;  # Exit only if aggregated return code is zero, else redisplay menu
+         esac
+       done ;;
+
+esac

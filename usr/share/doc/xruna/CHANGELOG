@@ -1,0 +1,20 @@
+2018-01-12 v3.1.0 : For -a menu, handle Hidden and NoDisplay applications correctly using two cache files, depending on whether objects specified
+                    Remove -h option and $hiding variable; add deferred cache refresh variable $refresh
+2017-12-22 v3.0.1 : Ensure man page correctly references $cmd_edfav and ${cmd_opdesk[@]}
+2017-12-19 v3.0.0 : Recode finding of desktop files in Run function; now finds apps within subdirectories too, whether prefixed by subdir- or not
+                    Recode finding of associated apps with gio/gvfs and sed; default application now found according to XDG standard when using sed
+                    Xdup function now also axes nulls. All configurable commands now prefixed by cmd_
+2017-12-16 v2.9.1 : Rename $sapps to $capps and $slist to $flist for clarity
+2017-12-15 v2.9.0 : Use find rather than stest command to trigger cache refresh and search for desktop files recursively now
+                    Update $mimer and add $finder to use wider range of mimetype determinants and associated app finders
+2017-12-07 v2.8.0 : Option -k now requires parameter: = to print all key=value pairs; or key to just print single value
+2017-12-06 v2.7.2 : Slightly extend sed search patterns for apps found by gio; clarify comments regarding hidden apps; reformat here documents
+2017-12-06 v2.7.1 : Default to using gio as mimetype determinant rather than file
+2017-12-05 v2.7.0 : Add boolean $gio to find default and associated apps using gio instead of mimeapps.list and mimeinfo.cache files
+                    Add new function Xdup to remove duplicates[*] from stdin instead of awk (10x faster)
+2017-12-05 v2.6.0 : $mimer now takes value f|g|m to use file, gio or mimetype determinant; error message if mimetype not found; revise exit codes
+2017-12-04 v2.5.2 : Significant bug fix: escape . and + in mimetype when using sed to search mimeapps.list and mimeinfo.cache files
+2017-12-02 v2.5.1 : New control token '?' displays other control tokens available for current menu
+2017-12-02 v2.5.0 : Move xruna.cache to configuration directory; remove Recache function and explicitly use rm instead
+2017-12-02 v2.4.1 : Can override configuration directory with XRUNA_CONF environment variable
+2017-12-01 v2.4.0 : First production release

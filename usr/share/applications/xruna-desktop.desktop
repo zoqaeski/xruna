@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=xruna-desktop
+Comment=Run desktop application files
+Terminal=false
+NoDisplay=true
+Icon=xruna
+Exec=xruna -h -r %F
+Categories=Applications;System;Utility;
+MimeType=application/x-desktop;

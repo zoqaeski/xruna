@@ -1,0 +1,22 @@
+xruna README
+
+
+For usage information, execute the command: man xruna
+For a log of changes, see: /usr/share/doc/xruna/CHANGELOG
+
+The first time xruna is executed it will create for the current user:
+
+Configuration file: ~/.config/xruna/xruna.conf
+Favourites file: ~/.config/xruna/xruna.fav
+
+xruna also comes with:
+
+A script which can replace freedesktop.org's 'xdg-open': /usr/share/doc/xruna/xdg-open
+Copy this to somewhere on the user's PATH before /usr/bin, for example /usr/local/bin,
+or rename the current /usr/bin/xdg-open and run the script via a symbolic link.
+
+Three desktop files:
+
+1) xruna.desktop         - Run any application and optionally open objects
+2) xruna-assoc.desktop   - Opens objects with associated applications
+3) xruna-desktop.desktop - Run desktop application files

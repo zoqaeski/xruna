@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=xruna
+Comment=Run any application and optionally open objects
+Terminal=false
+Icon=xruna
+Exec=xruna -a %U
+Categories=Applications;System;Utility;

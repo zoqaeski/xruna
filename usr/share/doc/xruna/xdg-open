@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Wrapper for xruna to override xdg-open; for example, copy to /usr/local/bin/xdg-open
+# Version 2017-11-19 by Douglas McFadzean
+
+exec xruna "$@"
